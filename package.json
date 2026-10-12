@@ -1,0 +1,82 @@
+{
+  "name": "examguard-desktop",
+  "version": "0.1.0",
+  "private": true,
+  "description": "ExamGuard desktop exam client",
+  "type": "module",
+  "main": "out/main/index.js",
+  "scripts": {
+    "dev": "electron-vite dev",
+    "build": "electron-vite build",
+    "preview": "electron-vite preview",
+    "lint": "eslint .",
+    "test": "node --test src/main/*.test.js src/renderer/src/*.test.js",
+    "prepackage": "node ./scripts/check-production-api-config.js",
+    "prepackage:linux": "node ./scripts/check-production-api-config.js",
+    "prepackage:windows": "node ./scripts/check-production-api-config.js",
+    "prepackage:macos": "node ./scripts/check-production-api-config.js",
+    "package": "npm run build && electron-builder",
+    "package:linux": "npm run build && electron-builder --linux",
+    "package:windows": "npm run build && electron-builder --win",
+    "package:macos": "npm run build && electron-builder --mac"
+  },
+  "dependencies": {
+    "react": "^19.3.0",
+    "react-dom": "^19.3.0"
+  },
+  "devDependencies": {
+    "@eslint/js": "^9.39.0",
+    "@tailwindcss/vite": "^4.3.3",
+    "@vitejs/plugin-react": "^5.2.0",
+    "electron": "^44.7.0",
+    "electron-builder": "^26.15.3",
+    "electron-vite": "^5.0.0",
+    "eslint": "^10.12.0",
+    "eslint-plugin-react-hooks": "^7.1.1",
+    "eslint-plugin-react-refresh": "^0.5.7",
+    "globals": "^17.13.0",
+    "tailwindcss": "^4.3.3",
+    "vite": "^7.3.7"
+  },
+  "build": {
+    "appId": "tech.unicores.examguard",
+    "productName": "ExamGuard",
+    "protocols": [
+      {
+        "name": "ExamGuard launch",
+        "schemes": [
+          "examguard"
+        ]
+      }
+    ],
+    "directories": {
+      "output": "release"
+    },
+    "files": [
+      "out/**/*",
+      "package.json"
+    ],
+    "extraResources": [
+      {
+        "from": "config/production.json",
+        "to": "config/production.json"
+      }
+    ],
+    "linux": {
+      "category": "Education",
+      "target": [
+        "AppImage"
+      ]
+    },
+    "win": {
+      "target": [
+        "nsis"
+      ]
+    },
+    "mac": {
+      "target": [
+        "dmg"
+      ]
+    }
+  }
+}
