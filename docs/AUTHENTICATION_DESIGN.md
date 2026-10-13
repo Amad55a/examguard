@@ -4,6 +4,28 @@
 the approved launch-ticket flow documented in
 [`LAUNCH_TICKET_DESIGN.md`](./LAUNCH_TICKET_DESIGN.md).
 
+## Current authorization boundary
+
+The signed-in portal may validate an exam token and request a one-use
+ExamGuard launch ticket, but it cannot load exam questions or create, resume,
+save, or submit an attempt in a normal browser session. The
+`/exam-session/:examId` route now directs students back to the portal.
+
+Ticket redemption creates an active-student ExamGuard session and issues
+signed access/refresh JWTs with the `clientType: "examguard"` claim while
+setting the normal HttpOnly cookies. The claim is signed by the backend and
+preserved during refresh rotation; it is not accepted from a request header.
+Backend start, recovery, answer, code execution, proctoring, fault, and
+submission endpoints require this claim. Class-roster membership is not
+required, but the backend still checks identity, account status, exam/class
+status, availability, ticket/session ownership, deadlines, and submission
+rules.
+
+Microphone-required exams are supported through status-only monitoring; ExamGuard
+does not record or transmit audio. Camera snapshots are only used when camera
+monitoring is required. Fullscreen and kiosk presentation are app-level
+restrictions, not OS-level lockdown.
+
 ## Recommendation
 
 Use UniCORE's existing web login (including its mandatory Turnstile check) to
@@ -12,8 +34,11 @@ a **dedicated Electron session and fixed main-process API operations**:
 
 1. Give ExamGuard a dedicated persistent Electron session partition, for
    example `persist:examguard-auth`.
-2. The student requests and manually copies a 60-second launch ticket from
-   the signed-in UniCORE student portal; the ticket is not put in a URL.
+2. The student requests a 60-second launch ticket from the signed-in UniCORE
+   student portal. The portal tries the `unicore-exam://` handoff and leaves
+   the ticket available for manual entry if the app is not installed. The
+   short-lived ticket may appear in OS protocol arguments, but must never be
+   logged or persisted by the portal.
 3. Redeem the ticket from Electron's main process using its session's
    `session.fetch()` and fixed API paths. Let the backend set its existing
    `HttpOnly`, `Secure` cookies in the Electron session cookie store.
@@ -260,10 +285,10 @@ more.
 - Development may use loopback HTTP (the current development config points to
   the local backend). Packaged production must use the approved HTTPS API
   origin and `/api/v1` base path.
-- The production config is currently blank. The production endpoint shown in
-  the task history is `https://www.unicores.tech/api/v1`; confirm this with the
-  deployment owner before packaging. Do not read `.env` or copy secrets into
-  either config file.
+- The production API endpoint is `https://api.unicores.tech/api/v1`, matching
+  the backend `SERVER_URL` host and confirmed by its JSON health and protected
+  auth routes. The website host is not the API host. The app config contains
+  only this public endpoint; do not copy credentials from environment files.
 - Validate the configured origin and pin every auth operation to that base.
   Prevent cross-origin redirects and do not let renderer-supplied URLs or
   headers control main-process requests.

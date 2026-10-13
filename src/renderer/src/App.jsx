@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import examGuardIcon from '../../../images/07_icon_only_round.png'
 import ExamGuardCameraMonitor from './ExamGuardCameraMonitor.jsx'
+import { getSessionRecoveryMessage } from './sessionRecovery.js'
 import {
   answersToList,
   answersToMap,
@@ -128,6 +129,8 @@ function App() {
       setSecurityMessage(event.recorded
         ? 'Exam security event recorded by UniCORE.'
         : 'This exam is configured not to record individual security events.')
+    } else if (event?.closeBlocked) {
+      setSecurityMessage('Submit the exam using the exam controls before closing ExamGuard.')
     }
   }), [setFinalState])
 
@@ -162,7 +165,14 @@ function App() {
       setExam(null)
       setSession(null)
       setStage('connect')
-      setMessage('Signed in. Enter a launch ticket from UniCORE.')
+      setMessage('Open an eligible exam from the UniCORE portal to receive a one-time launch ticket.')
+      return
+    }
+    if (active.status === 'recovery') {
+      setStage('connect')
+      setMessage(getSessionRecoveryMessage(new Error(active.message || '')).message)
+      setIsError(true)
+      setIsBusy(false)
       return
     }
     setExam(active.exam)
@@ -189,7 +199,7 @@ function App() {
       deepLinkRefreshRef.current += 1
       if (status.status !== 'redeemed') {
         setStage('connect')
-        setMessage(status.message || 'Unable to redeem the ExamGuard launch ticket.')
+        setMessage(getSessionRecoveryMessage(new Error(status.message || '')).message)
         setIsError(true)
         setIsBusy(false)
         return
@@ -198,14 +208,16 @@ function App() {
       setIsError(false)
       setIsBusy(true)
       try {
-        const { user: currentUser } = await window.examGuard.getCurrentUser()
+        const userResult = await window.examGuard.getCurrentUser()
+        if (userResult.status === 'recovery') throw new Error(userResult.message)
+        const { user: currentUser } = userResult
         if (cancelled) return
         setUser(currentUser)
         await loadPersistedExam(await window.examGuard.getExamSession())
       } catch (error) {
         if (cancelled) return
         setStage('connect')
-        setMessage(error.message || 'The exam session could not be loaded.')
+        setMessage(getSessionRecoveryMessage(error).message)
         setIsError(true)
         setIsBusy(false)
       }
@@ -214,18 +226,24 @@ function App() {
     async function restoreSession() {
       const currentDeepLinkRefresh = deepLinkRefreshRef.current
       try {
-        const { user: currentUser } = await window.examGuard.getCurrentUser()
+        const active = await window.examGuard.getExamSession()
+        if (cancelled || currentDeepLinkRefresh !== deepLinkRefreshRef.current) return
+        if (active.status === 'recovery') throw new Error(active.message)
+        if (active.status === 'none') {
+          await loadPersistedExam(active)
+          return
+        }
+        const userResult = await window.examGuard.getCurrentUser()
+        if (userResult.status === 'recovery') throw new Error(userResult.message)
+        const { user: currentUser } = userResult
         if (cancelled || currentDeepLinkRefresh !== deepLinkRefreshRef.current) return
         setUser(currentUser)
-        const active = await window.examGuard.getExamSession()
-        if (!cancelled && currentDeepLinkRefresh === deepLinkRefreshRef.current) {
-          await loadPersistedExam(active)
-        }
+        await loadPersistedExam(active)
       } catch (error) {
         if (cancelled || currentDeepLinkRefresh !== deepLinkRefreshRef.current) return
         setStage('connect')
-        setMessage(error.message || 'Enter a launch ticket from UniCORE.')
-        setIsError(Boolean(error.message))
+        setMessage(getSessionRecoveryMessage(error).message)
+        setIsError(true)
         setIsBusy(false)
       }
     }
@@ -238,6 +256,15 @@ function App() {
     }
   }, [loadPersistedExam])
 
+  const openUniCorePortal = async () => {
+    try {
+      await window.examGuard.openPortal()
+    } catch {
+      setMessage('Could not open the portal automatically. Visit https://www.unicores.tech and open your exam from the student portal.')
+      setIsError(true)
+    }
+  }
+
   const handleRedeem = async (event) => {
     event.preventDefault()
     setMessage('')
@@ -248,6 +275,7 @@ function App() {
         throw new Error('Enter the 43-character launch ticket from UniCORE.')
       }
       const result = await window.examGuard.redeemLaunchTicket(ticket.trim())
+      if (result.status === 'recovery') throw new Error(result.message)
       setUser(result.user)
       setExam(result.exam)
       setStage('ready')
@@ -261,7 +289,7 @@ function App() {
         setIsError(true)
       }
     } catch (error) {
-      setMessage(error.message || 'Unable to redeem the launch ticket.')
+      setMessage(getSessionRecoveryMessage(error).message)
       setIsError(true)
       setStage('connect')
       setIsBusy(false)
@@ -617,7 +645,10 @@ function App() {
               'paste_blocked',
             )}
           >
-            <ExamGuardCameraMonitor required={exam?.security?.cameraRequired === true} />
+            <ExamGuardCameraMonitor
+              cameraRequired={exam?.security?.cameraRequired === true}
+              microphoneRequired={exam?.security?.microphoneRequired === true}
+            />
             <header className="workspace-header">
               <h1 id="app-title">{exam?.title}</h1>
               <p className="workspace-countdown" aria-live="polite">
@@ -912,7 +943,9 @@ function App() {
                   ? 'Exam ready'
                   : stage === 'checking'
                     ? 'Checking session'
-                    : 'Connect to UniCORE'}
+                      : stage === 'session-expired'
+                        ? 'Reconnect to UniCORE'
+                      : 'Connect to UniCORE'}
             </h1>
 
             {user && <p className="session-user">Signed in as {user.fullName || user.name || user.email}</p>}
@@ -925,6 +958,11 @@ function App() {
                 {exam?.security?.cameraRequired && (
                   <p className="camera-notice">
                     This exam requires camera monitoring. ExamGuard will show your camera preview and send periodic snapshots to UniCORE for instructor review.
+                  </p>
+                )}
+                {exam?.security?.microphoneRequired && (
+                  <p className="camera-notice">
+                    This exam requires microphone monitoring. ExamGuard reports device status only; it does not record or transmit audio.
                   </p>
                 )}
                 <button className="primary-button" type="button" disabled={isBusy} onClick={startExam}>
@@ -942,8 +980,16 @@ function App() {
             )}
 
             {(stage === 'connect' || stage === 'session-expired') && (
+              <>
+              <section className="launch-guidance" aria-labelledby="launch-guidance-heading">
+                <h2 id="launch-guidance-heading">Open your exam from UniCORE</h2>
+                <p>Sign in to the student portal, open an eligible exam, and choose <strong>Open UniCORE Exam App</strong>. Each launch ticket is one-time and expires quickly.</p>
+                <button className="secondary-button" type="button" disabled={isBusy} onClick={openUniCorePortal}>
+                  Return to the UniCORE portal
+                </button>
+              </section>
               <form className="ticket-form" onSubmit={handleRedeem} noValidate>
-                <label htmlFor="launch-ticket">One-time ticket from the signed-in UniCORE portal</label>
+                <label htmlFor="launch-ticket">Enter the one-time ticket from the UniCORE portal</label>
                 <input
                   id="launch-ticket"
                   name="launchTicket"
@@ -964,9 +1010,10 @@ function App() {
                   }}
                 />
                 <button className="primary-button" type="submit" disabled={isBusy || !ticket.trim()}>
-                  {isBusy ? 'Please wait…' : 'Connect'}
+                  {isBusy ? 'Verifying invitation…' : 'Verify Invitation'}
                 </button>
               </form>
+              </>
             )}
 
             {stage === 'unavailable' && (

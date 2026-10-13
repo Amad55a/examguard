@@ -1,10 +1,10 @@
-import { app, BrowserWindow, Menu, ipcMain, session } from 'electron'
+import { app, BrowserWindow, Menu, ipcMain, session, shell, screen } from 'electron'
 import { readFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import { join, resolve } from 'node:path'
 import {
   createSecureWebPreferences,
-  canRequestExamCamera,
+  canRequestExamMedia,
   denyNewWindow,
   getDevelopmentRendererUrl,
   getPackagedConfigPath,
@@ -15,8 +15,15 @@ import { createLaunchTicketApi } from './launchTicket.js'
 import { registerLaunchTicketIpc } from './launchTicketIpc.js'
 import { createExamSessionStore } from './examSessionStore.js'
 import {
+  registerExamCloseGuard,
+  registerExamDisplayRestrictions,
+  registerExamWindowRestrictions,
+  setActiveExamWindowMode,
+} from './windowMode.js'
+import {
   createExamGuardDeepLinkHandler,
   findExamGuardLaunchUrl,
+  registerExamGuardProtocolClients,
   registerExamGuardProtocolEvents,
 } from './deepLink.js'
 
@@ -90,34 +97,32 @@ function recordExamFault(reason) {
 }
 
 function activateExamSecurity(security, examId) {
-  activeExamSecurity = security || null
+  activeExamSecurity = security || {}
   activeExamId = examId || null
   lastFaultAt = 0
   if (!mainWindow || mainWindow.isDestroyed()) return
-  if (activeExamSecurity?.fullscreenRequired) {
-    mainWindow.setFullScreen(true)
-  } else {
-    mainWindow.setFullScreen(false)
-  }
+  setActiveExamWindowMode(mainWindow, {
+    active: true,
+    fullscreenRequired: activeExamSecurity?.fullscreenRequired === true,
+  })
 }
 
 function clearExamSecurity() {
   activeExamSecurity = null
   activeExamId = null
-  if (mainWindow && !mainWindow.isDestroyed() && mainWindow.isFullScreen()) {
-    mainWindow.setFullScreen(false)
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    setActiveExamWindowMode(mainWindow, { active: false })
   }
 }
 
 if (!hasSingleInstanceLock) {
   app.quit()
 } else {
-  app.setAsDefaultProtocolClient(
-    'examguard',
-    ...(!app.isPackaged && process.argv[1]
-      ? [process.execPath, [resolve(process.argv[1])]]
-      : []),
-  )
+  registerExamGuardProtocolClients(app, {
+    isPackaged: app.isPackaged,
+    executablePath: process.execPath,
+    appPath: process.argv[1] ? resolve(process.argv[1]) : null,
+  })
   registerExamGuardProtocolEvents(app, {
     handleLaunchUrl: dispatchLaunchUrl,
     focusWindow,
@@ -150,13 +155,22 @@ function createWindow() {
     webPreferences: createSecureWebPreferences(
       fileURLToPath(new URL('../preload/index.cjs', import.meta.url)),
       AUTH_PARTITION,
+      !app.isPackaged,
     ),
   })
   mainWindow = window
 
   Menu.setApplicationMenu(null)
 
+  registerExamCloseGuard(window, {
+    isExamActive: () => Boolean(activeExamSecurity),
+    showExitWarning: () => sendSecurityEvent({ closeBlocked: true }),
+  })
+
   window.webContents.setWindowOpenHandler(denyNewWindow)
+  if (app.isPackaged) {
+    window.webContents.on('devtools-opened', () => window.webContents.closeDevTools())
+  }
   const blockUntrustedNavigation = (event, targetUrl) => {
     if (!isAllowedRendererNavigation(targetUrl, rendererUrl, rendererFile, app.isPackaged)) {
       event.preventDefault()
@@ -164,57 +178,11 @@ function createWindow() {
   }
   window.webContents.on('will-navigate', blockUntrustedNavigation)
   window.webContents.on('will-redirect', blockUntrustedNavigation)
-  window.webContents.on('context-menu', (event) => {
-    if (activeExamSecurity?.disableRightClick) {
-      event.preventDefault()
-      reportSecurityViolation('right_click_blocked')
-    }
-  })
-  window.webContents.on('before-input-event', (event, input) => {
-    if (input.type !== 'keyDown') return
-    const key = String(input.key || '').toLowerCase()
-    const command = input.control || input.meta
-    const copyShortcut = command && ['c', 'x', 'insert'].includes(key)
-    const pasteShortcut = (command && key === 'v') || (input.shift && key === 'insert')
-    const devtoolsShortcut = input.key === 'F12' ||
-      ((input.control || input.meta) && input.shift && ['i', 'j', 'c'].includes(key))
-    if (
-      (copyShortcut && activeExamSecurity?.disableCopy) ||
-      (pasteShortcut && activeExamSecurity?.disablePaste) ||
-      devtoolsShortcut
-    ) {
-      event.preventDefault()
-      if (copyShortcut && activeExamSecurity?.disableCopy) {
-        reportSecurityViolation('copy_blocked')
-      } else if (pasteShortcut && activeExamSecurity?.disablePaste) {
-        reportSecurityViolation('paste_blocked')
-      } else {
-        reportSecurityViolation('devtools_suspected')
-      }
-    }
-  })
-  window.on('blur', () => {
-    if (activeExamSecurity?.detectTabSwitch || activeExamSecurity?.fullscreenRequired) {
-      recordExamFault('window_blur')
-    }
-  })
-  window.on('minimize', (event) => {
-    if (activeExamSecurity?.fullscreenRequired) {
-      event.preventDefault()
-      recordExamFault('minimize')
-      window.restore()
-      window.setFullScreen(true)
-    }
-  })
-  window.on('leave-full-screen', () => {
-    if (activeExamSecurity?.fullscreenRequired) {
-      recordExamFault('fullscreen_exit')
-      setTimeout(() => {
-        if (!window.isDestroyed() && activeExamSecurity?.fullscreenRequired) {
-          window.setFullScreen(true)
-        }
-      }, 0)
-    }
+  registerExamWindowRestrictions(window, {
+    getSecurity: () => activeExamSecurity,
+    reportExamFault: recordExamFault,
+    reportSecurityViolation,
+    devToolsDisabled: () => app.isPackaged || Boolean(activeExamSecurity),
   })
 
   window.once('ready-to-show', () => window.show())
@@ -231,6 +199,10 @@ function createWindow() {
 
 app.whenReady().then(() => {
   if (!hasSingleInstanceLock) return
+  registerExamDisplayRestrictions(screen, {
+    getWindow: () => mainWindow,
+    getSecurity: () => activeExamSecurity,
+  })
   const authSession = session.fromPartition(AUTH_PARTITION)
   launchApi = createLaunchTicketApi({
     apiBaseUrl: publicConfig.apiBaseUrl,
@@ -250,7 +222,7 @@ app.whenReady().then(() => {
         rendererFile,
         app.isPackaged,
       )
-      allowed = canRequestExamCamera({
+      allowed = canRequestExamMedia({
         permission,
         mediaTypes: details.mediaTypes,
         isMainFrame: details.isMainFrame,
@@ -266,6 +238,7 @@ app.whenReady().then(() => {
   registerLaunchTicketIpc(ipcMain, launchApi, assertTrustedMainFrame, examSessionStore, {
     onExamStarted: activateExamSecurity,
     onExamEnded: clearExamSecurity,
+    openPortal: () => shell.openExternal('https://www.unicores.tech/exam-portal'),
   })
   deepLinkHandler = createExamGuardDeepLinkHandler({
     launchApi,

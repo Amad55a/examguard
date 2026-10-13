@@ -1,7 +1,17 @@
 const TICKET_PATTERN = /^[A-Za-z0-9_-]{43}$/
+const SUPPORTED_SCHEMES = new Set(['examguard', 'unicore-exam'])
+
+export function registerExamGuardProtocolClients(app, { isPackaged, executablePath, appPath }) {
+  const developmentArgs = !isPackaged && executablePath && appPath
+    ? [executablePath, [appPath]]
+    : []
+  for (const scheme of SUPPORTED_SCHEMES) {
+    app.setAsDefaultProtocolClient(scheme, ...developmentArgs)
+  }
+}
 
 export function parseExamGuardLaunchUrl(value) {
-  if (typeof value !== 'string' || !/^examguard:/i.test(value)) return null
+  if (typeof value !== 'string' || !/^(examguard|unicore-exam):/i.test(value)) return null
 
   let parsed
   try {
@@ -12,7 +22,7 @@ export function parseExamGuardLaunchUrl(value) {
 
   const tickets = parsed.searchParams.getAll('ticket')
   if (
-    parsed.protocol !== 'examguard:' ||
+    !SUPPORTED_SCHEMES.has(parsed.protocol.replace(':', '').toLowerCase()) ||
     parsed.hostname !== 'launch' ||
     parsed.port ||
     parsed.pathname !== '' ||
@@ -31,7 +41,7 @@ export function parseExamGuardLaunchUrl(value) {
 
 export function findExamGuardLaunchUrl(args) {
   return Array.isArray(args)
-    ? args.find((argument) => typeof argument === 'string' && /^examguard:/i.test(argument)) || null
+    ? args.find((argument) => typeof argument === 'string' && /^(examguard|unicore-exam):/i.test(argument)) || null
     : null
 }
 

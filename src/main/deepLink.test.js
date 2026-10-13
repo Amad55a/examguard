@@ -4,6 +4,7 @@ import {
   createExamGuardDeepLinkHandler,
   findExamGuardLaunchUrl,
   parseExamGuardLaunchUrl,
+  registerExamGuardProtocolClients,
   registerExamGuardProtocolEvents,
 } from './deepLink.js'
 
@@ -29,6 +30,25 @@ test('finds startup launch links without interpreting other command-line argumen
   const url = `examguard://launch?ticket=${ticket}`
   assert.equal(findExamGuardLaunchUrl(['--no-sandbox', url]), url)
   assert.equal(findExamGuardLaunchUrl(['--no-sandbox']), null)
+})
+
+test('registers both UniCORE and legacy protocol schemes in development and packaged builds', () => {
+  const calls = []
+  const app = { setAsDefaultProtocolClient: (...args) => calls.push(args) }
+
+  registerExamGuardProtocolClients(app, {
+    isPackaged: false,
+    executablePath: '/usr/bin/electron',
+    appPath: '/work/examguard/out/main/index.js',
+  })
+  assert.deepEqual(calls, [
+    ['examguard', '/usr/bin/electron', ['/work/examguard/out/main/index.js']],
+    ['unicore-exam', '/usr/bin/electron', ['/work/examguard/out/main/index.js']],
+  ])
+
+  calls.length = 0
+  registerExamGuardProtocolClients(app, { isPackaged: true })
+  assert.deepEqual(calls, [['examguard'], ['unicore-exam']])
 })
 
 test('redeems in the main process and stores only the bound exam session', async () => {

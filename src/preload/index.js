@@ -10,6 +10,7 @@ contextBridge.exposeInMainWorld(
   Object.freeze({
     redeemLaunchTicket: (ticket) => ipcRenderer.invoke('examguard:redeem-launch-ticket', ticket),
     getCurrentUser: () => ipcRenderer.invoke('examguard:get-current-user'),
+    openPortal: () => ipcRenderer.invoke('examguard:open-portal'),
     getExamSession: () => ipcRenderer.invoke('examguard:get-exam-session'),
     startExam: () => ipcRenderer.invoke('examguard:start-exam'),
     autosaveAnswers: (payload) => ipcRenderer.invoke('examguard:autosave-answers', payload),

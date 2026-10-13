@@ -5,21 +5,22 @@
 ## Decision summary
 
 Use a short-lived, one-time ticket issued by the authenticated UniCORE student
-website and manually entered into ExamGuard. Keep all ticket redemption,
+website. The portal attempts the `unicore-exam://` protocol handoff and keeps
+the ticket visible for manual entry as a fallback. Keep ticket redemption,
 cookie handling, and authenticated API calls in Electron's main process.
-Exchange a redeemed ticket for the existing UniCORE HttpOnly cookie session;
-do not return access or refresh JWTs in JSON or expose them through preload.
+The backend sets its HttpOnly session cookies and signs ExamGuard-specific
+access and refresh tokens; JWTs are never returned in JSON or exposed through
+preload.
 
 This launch path is only for exams whose `security.sebRequired` is false.
 ExamGuard is not Safe Exam Browser and cannot satisfy the existing
 `X-SafeExamBrowser-ConfigKeyHash` policy. A ticket must never be used to
 authorize a SEB-required exam.
 
-The backend enrollment and deadline gaps identified during inspection have
-been addressed for the student exam entry, autosave, and submit paths. An
-active `student` account must map to an enrolled
-`UniversityStudent` in the exam's `Class.students` roster. This behavior
-change was approved during design review.
+Class-roster membership is not an exam-access requirement. The backend still
+requires an authenticated active student, a valid exam and active class, an
+enterable status and time window, and a valid attempt. Deadlines, answer
+ownership, autosave, and submission remain server-authoritative.
 
 ## Legacy behavior and unsafe paths observed before implementation
 
@@ -64,18 +65,20 @@ UniCORE web session and `protect`.
 
 - The path identifies the exam. The server derives the student only from
   `req.user`; no submitted student ID is accepted.
-- Require `role === "student"`, active account status, active enrollment in
-  the exam's class, an enterable exam status and open availability window,
+- Require `role === "student"`, active account status, an enterable exam
+  status and open availability window (not class-roster membership),
   `sebRequired !== true`, and no terminal submission for this student/exam.
 - Generate 32 random bytes and encode as unpadded base64url (43 characters).
 - Return the plaintext ticket once with its expiry; persist only
   `SHA-256(ticket)`, `studentId`, `examId`, audience `examguard`, action
   `redeem-and-start`, expiry, and unused/redeemed state.
 - Set a 60-second expiry. Apply IP and authenticated-user rate limits.
-- Do not log the ticket, include it in a URL, save it in web storage, or
-  automatically launch an external protocol. The website displays it
-  temporarily for copy/paste; it clears it after redemption, cancellation,
-  or expiry.
+- Do not log the ticket or save it in web storage. The portal tries the
+  registered `unicore-exam://launch?ticket=...` handoff and also displays it
+  temporarily for copy/paste. The ticket is short-lived and single-use because
+  operating systems may expose protocol arguments to the launched app.
+- Clear the website ticket at expiry or when the student cancels; the desktop
+  app clears its ticket input after redemption.
 
 ### 2. Redeem
 
@@ -95,7 +98,7 @@ session to its stored student and exam; request-body identity fields are
 ignored/rejected.
 
 After claim, re-fetch and verify the stored user and exam: active student
-account, active class enrollment, enterable status, current exam window,
+account, active class, enterable status, current exam window,
 `sebRequired === false`, and no terminal/extra submission. Do not reset a
 previously submitted attempt. Create the existing UniCORE refresh-token
 record using the normal auth service, set the existing `accessToken` and
@@ -118,28 +121,24 @@ the sender/main frame and payload sizes, and returns only sanitized profile
 and exam data. Renderer code never receives JWTs or cookie values and has no
 generic IPC/request facility.
 
-The renderer receives the one-use ticket in an input field, forwards it over
-the fixed preload method, then clears the field. It stores no ticket or
-credential in local/session storage, URL, command-line argument, or logs.
-The website uses a temporary display/copy control, not a deep link, avoiding
-ticket exposure through browser history, referrers, protocol-handler
-arguments, and URL/access logs.
+The desktop renderer receives the one-use ticket in an input field, forwards
+it over the fixed preload method, then clears the field. It stores no ticket
+or credential in local/session storage or logs. The portal protocol handoff
+necessarily carries the short-lived ticket in the protocol URL; it must never
+contain a reusable exam token or an authentication JWT.
 
 ## Eligibility, attempts, and Safe Exam Browser
 
-The approved eligibility rule uses the existing domain relation:
+Exam access eligibility does not require resolving class-roster membership:
 
 1. Require an active account with `role: "student"`.
-2. Resolve the authenticated `User` to `UniversityStudent` by the existing
-   `registryId`/`registryModel` relation or `UniversityStudent.userId`.
-3. Require that record's ID in the exam class's `students` list, and require
-   the class to remain active.
-4. Recheck these facts at ticket issue, ticket redemption, and exam start.
+2. Require the exam and its class to remain active and the exam to be
+   enterable and within its availability window.
+3. Recheck these facts, plus session ownership and submission state, at ticket
+   issue, ticket redemption, and exam start.
 
-The shared `examEligibility.service.js` helper resolves the
-User-to-UniversityStudent mapping. Do not trust a client-supplied student ID.
-This changes the previous “valid exam code is sufficient” policy, as approved
-during design review.
+The shared `examEligibility.service.js` helper enforces the non-roster
+eligibility rules. Do not trust a client-supplied student ID.
 
 The existing unique submission index permits one attempt per student/exam.
 There is no separate attempt-limit field. An in-progress submission may be
@@ -251,9 +250,9 @@ scope.
 2. A caller-supplied `studentId` cannot change the student bound to the ticket
    or resulting auth cookies.
 3. Two concurrent redemption requests produce exactly one successful claim.
-4. Redemption and start reject inactive/non-student accounts, non-enrolled
-   students, inactive classes, unavailable/paused exams, and SEB-required
-   exams.
+4. Redemption and start allow an otherwise eligible student absent from the
+   roster, while still rejecting inactive/non-student accounts, inactive
+   classes, unavailable/paused exams, and unsupported SEB-required exams.
 5. A ticket cannot start a terminal or second attempt; an in-progress attempt
    resumes only for its owner.
 6. Autosave/submit do not accept late client answers; first post-deadline
@@ -301,15 +300,15 @@ verified.
   after 60 seconds, and are atomically claimed with a conditional
   `findOneAndUpdate`. A TTL index removes expired rows eventually; correctness
   does not depend on TTL cleanup.
-- Redemption revalidates the stored student, class enrollment, exam status,
+- Redemption revalidates the stored student, class status, exam status,
   window, SEB policy, and existing attempt before using the existing auth
   service to create the regular persisted refresh-token record and setting
   standard HttpOnly cookies. JWT values are omitted from the response.
-- ExamGuard uses a dedicated persistent Electron session and four fixed
-  preload operations. The main process handles requests, refresh, cookie
-  cleanup, and sender checks. The UI starts the bound exam session but does
-  not implement the exam-taking workspace in this phase.
-- Exam validation/start now enforce the approved enrollment rule. Start no
+- ExamGuard uses a dedicated persistent Electron session and fixed preload
+  operations. Signed JWT claims distinguish its protected exam-session
+  requests from ordinary website requests; refresh rotation preserves the
+  claim. The renderer takes the exam only in the authorized desktop workspace.
+- Exam validation/start do not require class-roster membership. Start no
   longer reopens stale submitted attempts. Autosave and submit use atomic
   status/deadline guards; the first post-deadline request finalizes only
   server-saved answers and rejects client-supplied late answers.
@@ -324,8 +323,13 @@ logout cookie cleanup, network/malformed responses, and the web handoff UI.
 These use mocks; production MongoDB atomic behavior, deployed cookies, and a
 running API have not been integration-tested.
 
-Remaining release requirements: configure and confirm the production HTTPS
-API URL; verify deployed cookie scope and Electron `session.fetch()` behavior;
-ensure the production database has the new indexes; and implement the
-ExamGuard exam workspace separately. ExamGuard does not provide OS-level
-lockdown and must not be used for exams requiring SEB.
+The microphone monitor requests access only when required, reports device
+status, and does not record or transmit audio. Camera snapshots are only
+captured when camera monitoring is required. Fullscreen/kiosk restrictions
+are application-level and do not provide OS-level lockdown; ExamGuard must
+not be used for exams requiring Safe Exam Browser or managed browser lock.
+
+Remaining release requirements: verify the deployed HTTPS API URL, cookie
+scope and Electron `session.fetch()` behavior, and production MongoDB indexes.
+No live production-account/API integration was performed by the latest
+workspace checks, so deployment must still be verified independently.

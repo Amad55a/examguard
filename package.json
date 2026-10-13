@@ -2,7 +2,9 @@
   "name": "examguard-desktop",
   "version": "0.1.0",
   "private": true,
+  "author": "UniCORE",
   "description": "ExamGuard desktop exam client",
+  "desktopName": "ExamGuard",
   "type": "module",
   "main": "out/main/index.js",
   "scripts": {
@@ -13,12 +15,8 @@
     "test": "node --test src/main/*.test.js src/renderer/src/*.test.js",
     "prepackage": "node ./scripts/check-production-api-config.js",
     "prepackage:linux": "node ./scripts/check-production-api-config.js",
-    "prepackage:windows": "node ./scripts/check-production-api-config.js",
-    "prepackage:macos": "node ./scripts/check-production-api-config.js",
-    "package": "npm run build && electron-builder",
-    "package:linux": "npm run build && electron-builder --linux",
-    "package:windows": "npm run build && electron-builder --win",
-    "package:macos": "npm run build && electron-builder --mac"
+    "package": "npm run package:linux",
+    "package:linux": "npm run build && electron-builder --linux && sha256sum release/*.deb release/*.AppImage > release/SHA256SUMS.txt"
   },
   "dependencies": {
     "react": "^19.3.0",
@@ -41,11 +39,18 @@
   "build": {
     "appId": "tech.unicores.examguard",
     "productName": "ExamGuard",
+    "icon": "images/04_app_icon_main.png",
     "protocols": [
       {
         "name": "ExamGuard launch",
         "schemes": [
           "examguard"
+        ]
+      },
+      {
+        "name": "UniCORE exam launch",
+        "schemes": [
+          "unicore-exam"
         ]
       }
     ],
@@ -64,18 +69,11 @@
     ],
     "linux": {
       "category": "Education",
+      "maintainer": "UniCORE",
+      "syncDesktopName": true,
       "target": [
-        "AppImage"
-      ]
-    },
-    "win": {
-      "target": [
-        "nsis"
-      ]
-    },
-    "mac": {
-      "target": [
-        "dmg"
+        "AppImage",
+        "deb"
       ]
     }
   }

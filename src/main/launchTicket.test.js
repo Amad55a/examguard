@@ -308,10 +308,12 @@ test('malformed API data and network failures are explicit', async () => {
   const networkApi = createLaunchTicketApi({
     apiBaseUrl,
     authSession: createSession(async () => {
-      throw new Error('network detail')
+      const error = new Error('network detail')
+      error.code = 'ECONNREFUSED'
+      throw error
     }),
   })
-  await assert.rejects(networkApi.redeemLaunchTicket(ticket), /could not be reached/)
+  await assert.rejects(networkApi.redeemLaunchTicket(ticket), /configured UniCORE API/)
 })
 
 test('runs code only for an allowed coding question and returns a reduced result', async () => {
@@ -378,7 +380,7 @@ test('runs code only for an allowed coding question and returns a reduced result
   }), /not enabled/)
 })
 
-test('posts only validated camera status to the existing proctor heartbeat API', async () => {
+test('posts only validated proctoring device status to the existing heartbeat API', async () => {
   const calls = []
   const api = createLaunchTicketApi({
     apiBaseUrl,
@@ -396,11 +398,17 @@ test('posts only validated camera status to the existing proctor heartbeat API',
     cameraOk: true,
     snapshot: 'data:image/jpeg;base64,aGVsbG8=',
   })
+  await api.sendProctorHeartbeat(exam.id, { microphoneOk: true })
+  assert.deepEqual(JSON.parse(calls[1].init.body), { microphoneOk: true })
   await assert.rejects(api.sendProctorHeartbeat(exam.id, {
     cameraOk: true,
     snapshot: 'data:image/svg+xml;base64,PHN2Zz4=',
   }), /status update was invalid/)
-  assert.equal(calls.length, 1)
+  await assert.rejects(api.sendProctorHeartbeat(exam.id, {
+    microphoneOk: true,
+    audio: 'data:audio/webm;base64,AA==',
+  }), /status update was invalid/)
+  assert.equal(calls.length, 2)
 })
 
 test('uses only existing UniCORE exam security endpoints with fixed event values', async () => {

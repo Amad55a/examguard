@@ -3,7 +3,7 @@ import { readFileSync } from 'node:fs'
 import { test } from 'node:test'
 import {
   createSecureWebPreferences,
-  canRequestExamCamera,
+  canRequestExamMedia,
   denyNewWindow,
   getDevelopmentRendererUrl,
   getPackagedConfigPath,
@@ -15,6 +15,7 @@ import {
 test('web preferences keep renderer privileges isolated and sandboxed', () => {
   assert.deepEqual(createSecureWebPreferences('/app/preload.cjs'), {
     preload: '/app/preload.cjs',
+    devTools: false,
     contextIsolation: true,
     nodeIntegration: false,
     sandbox: true,
@@ -22,9 +23,10 @@ test('web preferences keep renderer privileges isolated and sandboxed', () => {
     allowRunningInsecureContent: false,
     webviewTag: false,
   })
+  assert.equal(createSecureWebPreferences('/app/preload.cjs', undefined, true).devTools, true)
 })
 
-test('permits only required camera access from the trusted exam window', () => {
+test('permits only the exact required media devices from the trusted exam window', () => {
   const request = {
     permission: 'media',
     mediaTypes: ['video'],
@@ -33,13 +35,24 @@ test('permits only required camera access from the trusted exam window', () => {
     cameraRequired: true,
     microphoneRequired: false,
   }
-  assert.equal(canRequestExamCamera(request), true)
-  assert.equal(canRequestExamCamera({ ...request, mediaTypes: ['audio'] }), false)
-  assert.equal(canRequestExamCamera({ ...request, mediaTypes: ['video', 'audio'] }), false)
-  assert.equal(canRequestExamCamera({ ...request, isMainFrame: false }), false)
-  assert.equal(canRequestExamCamera({ ...request, isTrustedWindow: false }), false)
-  assert.equal(canRequestExamCamera({ ...request, cameraRequired: false }), false)
-  assert.equal(canRequestExamCamera({ ...request, microphoneRequired: true }), false)
+  assert.equal(canRequestExamMedia(request), true)
+  assert.equal(canRequestExamMedia({ ...request, mediaTypes: ['audio'] }), false)
+  assert.equal(canRequestExamMedia({ ...request, mediaTypes: ['video', 'audio'] }), false)
+  assert.equal(canRequestExamMedia({ ...request, isMainFrame: false }), false)
+  assert.equal(canRequestExamMedia({ ...request, isTrustedWindow: false }), false)
+  assert.equal(canRequestExamMedia({ ...request, cameraRequired: false }), false)
+  assert.equal(canRequestExamMedia({ ...request, microphoneRequired: true }), false)
+  assert.equal(canRequestExamMedia({
+    ...request,
+    mediaTypes: ['audio'],
+    cameraRequired: false,
+    microphoneRequired: true,
+  }), true)
+  assert.equal(canRequestExamMedia({
+    ...request,
+    mediaTypes: ['audio', 'video'],
+    microphoneRequired: true,
+  }), true)
 })
 
 test('development renderer URL accepts only loopback HTTP', () => {
@@ -134,7 +147,7 @@ test('public config rejects unrecognized keys and secrets-shaped URL credentials
       true,
       (path) => readFileSync(path, 'utf8'),
     ),
-    { apiBaseUrl: '' },
+    { apiBaseUrl: 'https://api.unicores.tech/api/v1' },
   )
   assert.throws(
     () =>

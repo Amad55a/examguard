@@ -134,6 +134,37 @@ textarea:disabled {
   margin: 6px auto 0;
 }
 
+.launch-guidance {
+  display: grid;
+  justify-items: center;
+  gap: 10px;
+  width: min(100%, 560px);
+  margin: 4px auto 0;
+  text-align: center;
+}
+
+.launch-guidance h2,
+.launch-guidance p {
+  margin: 0;
+}
+
+.launch-guidance h2 {
+  color: #17186f;
+  font-size: 18px;
+  font-weight: 700;
+  line-height: 1.35;
+}
+
+.launch-guidance p {
+  color: #3f3f46;
+  font-size: 13px;
+  line-height: 1.55;
+}
+
+.launch-guidance .secondary-button {
+  margin-top: 2px;
+}
+
 .ticket-form label,
 .response-field > span,
 .answer-options legend {

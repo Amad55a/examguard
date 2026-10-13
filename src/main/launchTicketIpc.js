@@ -16,35 +16,72 @@ export function registerLaunchTicketIpc(
     }
     if (savedSession.userId !== authenticatedUserId) {
       examSessionStore.clear()
+      callbacks.onExamEnded?.()
       throw new Error('The saved exam belongs to another signed-in student.')
     }
     return savedSession
   }
 
-  ipcMain.handle('examguard:redeem-launch-ticket', async (event, ticket) => {
-    assertTrustedMainFrame(event)
-    const result = await launchApi.redeemLaunchTicket(ticket)
-    examSessionStore.set({ userId: result.user.id, exam: result.exam })
-    authenticatedUserId = result.user.id
-    return result
-  })
-
-  ipcMain.handle('examguard:get-current-user', async (event) => {
+  async function getCurrentUser(event) {
     assertTrustedMainFrame(event)
     const result = await launchApi.getCurrentUser()
     authenticatedUserId = result.user.id
     const savedSession = examSessionStore.get()
     if (savedSession && savedSession.userId !== authenticatedUserId) {
       examSessionStore.clear()
+      callbacks.onExamEnded?.()
     }
     return result
+  }
+
+  function isRecoverableSessionError(error) {
+    return error?.retryable === true ||
+      [401, 403, 410, 428, 429].includes(error?.status) ||
+      error?.status >= 500
+  }
+
+  ipcMain.handle('examguard:redeem-launch-ticket', async (event, ticket) => {
+    assertTrustedMainFrame(event)
+    let result
+    try {
+      result = await launchApi.redeemLaunchTicket(ticket)
+    } catch (error) {
+      if (!isRecoverableSessionError(error)) throw error
+      return { status: 'recovery', message: error.message }
+    }
+    examSessionStore.set({ userId: result.user.id, exam: result.exam })
+    authenticatedUserId = result.user.id
+    return result
+  })
+
+  ipcMain.handle('examguard:get-current-user', async (event) => {
+    try {
+      return await getCurrentUser(event)
+    } catch (error) {
+      if (!isRecoverableSessionError(error)) throw error
+      return { status: 'recovery', message: error.message }
+    }
+  })
+
+  ipcMain.handle('examguard:open-portal', async (event) => {
+    assertTrustedMainFrame(event)
+    if (typeof callbacks.openPortal !== 'function') {
+      throw new Error('Opening the UniCORE portal is unavailable.')
+    }
+    return callbacks.openPortal()
   })
 
   ipcMain.handle('examguard:get-exam-session', async (event) => {
     assertTrustedMainFrame(event)
     if (!examSessionStore.get()) return { status: 'none', exam: null }
-    const savedSession = await requireActiveExam()
-    if (savedSession.exam.security?.microphoneRequired || savedSession.exam.security?.browserLock) {
+    let savedSession
+    try {
+      savedSession = await requireActiveExam()
+    } catch (error) {
+      if (!isRecoverableSessionError(error)) throw error
+      return { status: 'recovery', message: error.message }
+    }
+    if (savedSession.exam.security?.browserLock) {
       throw new Error('This exam requires security features that ExamGuard does not support.')
     }
     const status = await launchApi.getExamSessionStatus(savedSession.exam.id)
@@ -67,7 +104,7 @@ export function registerLaunchTicketIpc(
   ipcMain.handle('examguard:start-exam', async (event) => {
     assertTrustedMainFrame(event)
     const savedSession = await requireActiveExam()
-    if (savedSession.exam.security?.microphoneRequired || savedSession.exam.security?.browserLock) {
+    if (savedSession.exam.security?.browserLock) {
       throw new Error('This exam requires security features that ExamGuard does not support.')
     }
     const startedSession = await launchApi.startExam(savedSession.exam.id)
@@ -106,10 +143,10 @@ export function registerLaunchTicketIpc(
     assertTrustedMainFrame(event)
     const savedSession = await requireActiveExam()
     if (
-      savedSession.exam.security?.cameraRequired !== true ||
-      savedSession.exam.security?.microphoneRequired === true
+      savedSession.exam.security?.cameraRequired !== true &&
+      savedSession.exam.security?.microphoneRequired !== true
     ) {
-      throw new Error('Camera monitoring is not enabled for this exam.')
+      throw new Error('Proctoring device monitoring is not enabled for this exam.')
     }
     return launchApi.sendProctorHeartbeat(savedSession.exam.id, payload)
   })

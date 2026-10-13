@@ -3,10 +3,11 @@ import { fileURLToPath } from 'node:url'
 
 const LOOPBACK_HOSTS = new Set(['localhost', '127.0.0.1', '[::1]'])
 
-export function createSecureWebPreferences(preload, partition) {
+export function createSecureWebPreferences(preload, partition, devTools = false) {
   return {
     preload,
     ...(partition ? { partition } : {}),
+    devTools,
     contextIsolation: true,
     nodeIntegration: false,
     sandbox: true,
@@ -16,7 +17,7 @@ export function createSecureWebPreferences(preload, partition) {
   }
 }
 
-export function canRequestExamCamera({
+export function canRequestExamMedia({
   permission,
   mediaTypes,
   isMainFrame,
@@ -24,14 +25,17 @@ export function canRequestExamCamera({
   cameraRequired,
   microphoneRequired,
 }) {
+  const requiredTypes = [
+    ...(cameraRequired === true ? ['video'] : []),
+    ...(microphoneRequired === true ? ['audio'] : []),
+  ].sort()
+  const requestedTypes = Array.isArray(mediaTypes) ? [...new Set(mediaTypes)].sort() : []
   return permission === 'media' &&
     isMainFrame === true &&
     isTrustedWindow === true &&
-    cameraRequired === true &&
-    microphoneRequired !== true &&
-    Array.isArray(mediaTypes) &&
-    mediaTypes.length === 1 &&
-    mediaTypes[0] === 'video'
+    requiredTypes.length > 0 &&
+    requestedTypes.length === requiredTypes.length &&
+    requestedTypes.every((type, index) => type === requiredTypes[index])
 }
 
 export function getDevelopmentRendererUrl(rendererUrl, isPackaged) {

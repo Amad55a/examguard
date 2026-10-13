@@ -1,0 +1,73 @@
+name: Linux release
+
+on:
+  workflow_dispatch:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  build-linux:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Verify release tag version
+        if: github.ref_type == 'tag'
+        shell: bash
+        run: |
+          tag_version="${GITHUB_REF_NAME#v}"
+          app_version="$(node -p "require('./package.json').version")"
+          if [[ "$tag_version" != "$app_version" ]]; then
+            echo "Tag version $tag_version does not match package version $app_version." >&2
+            exit 1
+          fi
+
+      - name: Lint
+        run: npm run lint
+
+      - name: Test
+        run: npm test
+
+      - name: Build Linux installers and checksums
+        run: npm run package:linux
+
+      - name: Upload Linux artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: ExamGuard-Linux-x86_64
+          path: |
+            release/*.AppImage
+            release/*.deb
+            release/SHA256SUMS.txt
+          if-no-files-found: error
+
+      - name: Publish GitHub release
+        if: github.ref_type == 'tag'
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.ref_name }}
+          name: ExamGuard ${{ github.ref_name }}
+          generate_release_notes: true
+          body: |
+            Linux x86_64 build only. Includes an AppImage and Debian package.
+            Verify downloads with `SHA256SUMS.txt`. This build does not provide
+            operating-system lockdown. Windows and macOS packages are not
+            included or supported by this release.
+          files: |
+            release/*.AppImage
+            release/*.deb
+            release/SHA256SUMS.txt

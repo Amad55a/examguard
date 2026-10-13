@@ -1,6 +1,26 @@
 const MAX_TICKET_LENGTH = 128
 const API_TIMEOUT_MS = 15_000
 const MAX_ANSWER_PAYLOAD_BYTES = 1_000_000
+const NETWORK_ERROR_CODES = new Set([
+  'ABORT_ERR',
+  'CERT_HAS_EXPIRED',
+  'ECONNREFUSED',
+  'ECONNRESET',
+  'ENETUNREACH',
+  'ENOTFOUND',
+  'ERR_CERT_AUTHORITY_INVALID',
+  'ERR_CERT_COMMON_NAME_INVALID',
+  'ERR_CERT_DATE_INVALID',
+  'ERR_INTERNET_DISCONNECTED',
+  'ERR_NAME_NOT_RESOLVED',
+  'ERR_CONNECTION_REFUSED',
+  'ERR_CONNECTION_TIMED_OUT',
+  'ERR_NETWORK_CHANGED',
+  'ERR_TLS_CERT_ALTNAME_INVALID',
+  'ETIMEDOUT',
+  'EAI_AGAIN',
+  'TimeoutError',
+])
 const RUNNABLE_LANGUAGES = new Set(['python', 'javascript', 'c', 'cpp', 'csharp'])
 const SECURITY_VIOLATIONS = new Set([
   'copy_blocked',
@@ -29,20 +49,58 @@ const SUBMISSION_STATUSES = new Set([
 ])
 
 function safeMessage(status, fallback, path) {
-  if (status === 401 && path.startsWith('auth/')) return 'Desktop session expired. Enter a new launch ticket.'
-  if (status === 401) return 'Your exam session expired. Enter a new launch ticket.'
+  if (status === 401 && path.startsWith('auth/')) {
+    return 'Your saved UniCORE session has expired. Return to the portal and open the exam again to get a fresh launch ticket.'
+  }
+  if (status === 401 && path.endsWith('/launch-ticket/redeem')) {
+    return 'This launch ticket is invalid, expired, or already used. Return to the portal and open the exam again for a new ticket.'
+  }
   if (status === 410 && (path.includes('/start') || path.includes('/autosave') || path.includes('/submit'))) {
     return 'The exam deadline has passed.'
   }
-  if (status === 401 || status === 410) return 'This launch ticket is invalid or expired.'
+  if (status === 410 && path.endsWith('/launch-ticket/redeem')) {
+    return 'This launch ticket is invalid, expired, or already used. Return to the portal and open the exam again for a new ticket.'
+  }
+  if (status === 401) return 'Your UniCORE exam session has expired. Return to the portal and open the exam again.'
+  if (status === 410) return 'This launch request is no longer valid. Return to the portal and open the exam again.'
   if (status === 403 || status === 428) return 'This exam is unavailable for ExamGuard.'
   if (status === 409) return 'A newer answer update exists. Refresh the saved session before retrying.'
   if (status === 429) return 'Too many launch attempts. Please wait and try again.'
+  if (status >= 500) return 'UniCORE is temporarily unavailable. Check your connection and try again later.'
   return fallback
 }
 
 function isRecord(value) {
   return Boolean(value) && typeof value === 'object' && !Array.isArray(value)
+}
+
+function getSafeNetworkErrorCode(error) {
+  const candidates = [error?.code, error?.cause?.code, error?.name, error?.cause?.name]
+  const directMatch = candidates.find((candidate) => NETWORK_ERROR_CODES.has(candidate))
+  if (directMatch) return directMatch
+  const messageMatch = [...NETWORK_ERROR_CODES].find((candidate) =>
+    (error?.message || error?.cause?.message || '').includes(candidate),
+  )
+  return messageMatch || 'NETWORK_ERROR'
+}
+
+function networkErrorMessage(code) {
+  if (['ETIMEDOUT', 'ABORT_ERR', 'TimeoutError', 'ERR_CONNECTION_TIMED_OUT'].includes(code)) {
+    return 'The UniCORE API request timed out. Check your connection and try again.'
+  }
+  if (['ECONNREFUSED', 'ERR_CONNECTION_REFUSED'].includes(code)) {
+    return 'Could not connect to the configured UniCORE API. Check that the backend is running and the API URL is correct.'
+  }
+  if (['ENOTFOUND', 'EAI_AGAIN', 'ERR_NAME_NOT_RESOLVED'].includes(code)) {
+    return 'The configured UniCORE API hostname could not be resolved. Check the API URL and your network.'
+  }
+  if (code.startsWith('ERR_CERT_') || code.startsWith('ERR_TLS_') || code === 'CERT_HAS_EXPIRED') {
+    return 'The secure connection to UniCORE failed certificate verification. Check your system clock or network configuration.'
+  }
+  if (['ERR_INTERNET_DISCONNECTED', 'ERR_NETWORK_CHANGED', 'ENETUNREACH'].includes(code)) {
+    return 'UniCORE could not be reached because the network is unavailable.'
+  }
+  return 'UniCORE could not be reached. Check your connection and try again.'
 }
 
 function pickUser(value) {
@@ -243,9 +301,17 @@ export function createLaunchTicketApi({ apiBaseUrl, authSession }) {
         redirect: 'error',
         signal: AbortSignal.timeout(API_TIMEOUT_MS),
       })
-    } catch {
-      const error = new Error('UniCORE could not be reached. Check your connection and try again.')
+    } catch (cause) {
+      const code = getSafeNetworkErrorCode(cause)
+      console.warn('[ExamGuard API] Request failed', {
+        method,
+        path: url.pathname,
+        origin: apiOrigin,
+        code,
+      })
+      const error = new Error(networkErrorMessage(code))
       error.retryable = true
+      error.code = code
       throw error
     }
 
@@ -479,23 +545,34 @@ export function createLaunchTicketApi({ apiBaseUrl, authSession }) {
         typeof examId !== 'string' ||
         !/^[a-f\d]{24}$/i.test(examId) ||
         !isRecord(payload) ||
-        Object.keys(payload).some((key) => !['cameraOk', 'snapshot', 'note'].includes(key)) ||
-        typeof payload.cameraOk !== 'boolean' ||
+        Object.keys(payload).some((key) =>
+          !['cameraOk', 'microphoneOk', 'snapshot', 'note'].includes(key)) ||
+        (typeof payload.cameraOk !== 'boolean' && typeof payload.microphoneOk !== 'boolean') ||
+        (payload.cameraOk !== undefined && typeof payload.cameraOk !== 'boolean') ||
+        (payload.microphoneOk !== undefined && typeof payload.microphoneOk !== 'boolean') ||
         (payload.snapshot !== undefined &&
-          (typeof payload.snapshot !== 'string' ||
+          (payload.cameraOk !== true ||
+            typeof payload.snapshot !== 'string' ||
             payload.snapshot.length > 380_000 ||
             !/^data:image\/jpeg;base64,[A-Za-z0-9+/]+=*$/i.test(payload.snapshot))) ||
         (payload.note !== undefined &&
-          !['camera_denied', 'camera_lost', 'camera_unavailable'].includes(payload.note))
+          ![
+            'camera_denied',
+            'camera_lost',
+            'camera_unavailable',
+            'microphone_denied',
+            'microphone_lost',
+            'microphone_unavailable',
+          ].includes(payload.note))
       ) {
-        throw new Error('The camera status update was invalid.')
+        throw new Error('The proctoring device status update was invalid.')
       }
       const data = await protectedRequest(`exams/student/${examId}/proctor-heartbeat`, {
         method: 'POST',
         body: payload,
       })
       if (!isRecord(data) || data.recorded !== true) {
-        throw new Error('UniCORE did not confirm the camera status update.')
+        throw new Error('UniCORE did not confirm the proctoring device status update.')
       }
       return { recorded: true }
     },
