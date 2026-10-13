@@ -2,6 +2,9 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import examGuardIcon from '../../../images/07_icon_only_round.png'
 import ExamGuardCameraMonitor from './ExamGuardCameraMonitor.jsx'
 import { getSessionRecoveryMessage } from './sessionRecovery.js'
+import { StudentCodingLab } from './teacher/components/CodingLab.jsx'
+import LinuxLab from './teacher/components/LinuxLab.jsx'
+import DesignLab from './teacher/components/DesignLab.jsx'
 import {
   answersToList,
   answersToMap,
@@ -650,6 +653,10 @@ function App() {
               microphoneRequired={exam?.security?.microphoneRequired === true}
             />
             <header className="workspace-header">
+              <div className="session-header-meta" aria-label="Secure session status">
+                <span className="integrity-dot" aria-hidden="true" />
+                <span>Secure exam session</span>
+              </div>
               <h1 id="app-title">{exam?.title}</h1>
               <p className="workspace-countdown" aria-live="polite">
                 Time remaining: {formatRemainingTime(remainingSeconds)}
@@ -787,68 +794,70 @@ function App() {
               )}
 
               {activeQuestion.type === 'lab' && (
-                <div className="response-field">
-                  <span>Code response</span>
-                  {allowedCodeLanguages.length > 0 && (
-                    <div className="code-language-tabs" role="group" aria-label="Allowed programming languages">
-                      {allowedCodeLanguages.map((language) => (
-                        <button
-                          key={language}
-                          type="button"
-                          disabled={isLocked}
-                          aria-pressed={selectedCodeLanguage === language}
-                          onClick={() => setCodeLanguage(language)}
-                        >
-                          {language}
-                        </button>
-                      ))}
-                    </div>
-                  )}
-                  <textarea
-                    className="code-response"
-                    aria-label={`Code response${selectedCodeLanguage ? ` (${selectedCodeLanguage})` : ''}`}
-                    value={activeCode ?? activeQuestion.starterCode?.[selectedCodeLanguage] ??
-                      (typeof activeQuestion.starterCode === 'string' ? activeQuestion.starterCode : '')}
-                    disabled={isLocked}
-                    onChange={(event) => {
-                      const codes = {
-                        ...(answerForActiveQuestion?.codes || {}),
-                        ...(selectedCodeLanguage ? { [selectedCodeLanguage]: event.target.value } : {}),
-                      }
-                      updateAnswer(activeQuestion, {
-                        ...(answerForActiveQuestion && typeof answerForActiveQuestion === 'object'
-                          ? answerForActiveQuestion
-                          : {}),
-                        langId: selectedCodeLanguage,
-                        code: event.target.value,
-                        codes,
-                      })
+                <div style={{ minHeight: 460, height: 560, border: '1px solid #30363d', borderRadius: 12, overflow: 'hidden', background: '#0d1117' }}>
+                  <StudentCodingLab
+                    question={activeQuestion}
+                    value={answers[activeQuestion.id]?.answer}
+                    onSave={(value) => {
+                      const payload = value && typeof value === 'object' ? value : { langId: selectedCodeLanguage, code: value }
+                      updateAnswer(activeQuestion, payload)
                     }}
-                    rows={12}
-                    spellCheck="false"
                   />
-                  {allowedCodeLanguages.some((language) => ['python', 'javascript', 'c', 'cpp', 'csharp'].includes(language)) ? (
-                    <button
-                      type="button"
-                      className="secondary-button"
-                      disabled={isLocked || isRunningCode || !selectedCodeLanguage}
-                      onClick={() => void runActiveCode()}
-                    >
-                      {isRunningCode ? 'Running…' : 'Run code'}
-                    </button>
-                  ) : (
-                    <span>Execution is not enabled for the selected language.</span>
-                  )}
-                  {codeRunError && <span className="code-run-error" role="alert">{codeRunError}</span>}
-                  {answers[activeQuestion.id]?.codeOutput && (
-                    <pre className="code-output" aria-label="Code execution output">
-                      {answers[activeQuestion.id].codeOutput}
-                    </pre>
-                  )}
                 </div>
               )}
 
-              {['os_windows', 'os_linux', 'design_lab', 'networking_lab'].includes(activeQuestion.type) && (
+              {activeQuestion.type === 'os_linux' && (
+                <div style={{ minHeight: 460, height: 560, border: '1px solid #30363d', borderRadius: 12, overflow: 'hidden', background: '#0d1117' }}>
+                  <LinuxLab
+                    question={activeQuestion}
+                    examId={exam?.id || questions[0]?.examId}
+                    initialSessionId={
+                      answers[activeQuestion.id]?.answer?.sessionId ||
+                      (typeof answers[activeQuestion.id]?.answer === 'string' ? answers[activeQuestion.id]?.answer : null)
+                    }
+                    onSessionReady={(sessionId) => {
+                      const currentAnswer = answers[activeQuestion.id]?.answer
+                      updateAnswer(activeQuestion, {
+                        ...(currentAnswer && typeof currentAnswer === 'object' ? currentAnswer : {}),
+                        sessionId,
+                      })
+                    }}
+                  />
+                </div>
+              )}
+
+              {activeQuestion.type === 'design_lab' && (
+                <div className="design-lab-host" style={{ minHeight: 720, height: 760, border: '1px solid #d4d4d8', borderRadius: 12, overflow: 'hidden', background: '#F3F4F7' }}>
+                  <DesignLab
+                    question={activeQuestion}
+                    value={answers[activeQuestion.id]?.answer}
+                    initialDesignId={
+                      answers[activeQuestion.id]?.answer?.designId ||
+                      (typeof answers[activeQuestion.id]?.answer === 'string' ? answers[activeQuestion.id]?.answer : null)
+                    }
+                    onDesignCreated={(designId) => {
+                      const currentAnswer = answers[activeQuestion.id]?.answer
+                      updateAnswer(activeQuestion, {
+                        ...(currentAnswer && typeof currentAnswer === 'object' ? currentAnswer : {}),
+                        designId,
+                      })
+                    }}
+                    onChange={(value) => {
+                      if (!value || typeof value === 'string') {
+                        updateAnswer(activeQuestion, value || '')
+                        return
+                      }
+                      const currentAnswer = answers[activeQuestion.id]?.answer
+                      updateAnswer(activeQuestion, {
+                        ...(currentAnswer && typeof currentAnswer === 'object' ? currentAnswer : {}),
+                        ...value,
+                      })
+                    }}
+                  />
+                </div>
+              )}
+
+              {['os_windows', 'networking_lab'].includes(activeQuestion.type) && (
                 <label className="response-field">
                   <span>Your written response</span>
                   <textarea
@@ -857,13 +866,9 @@ function App() {
                     onChange={(event) => updateAnswer(activeQuestion, parseAnswerText(event.target.value))}
                     rows={9}
                   />
-                  <span>{activeQuestion.type === 'os_linux'
-                    ? 'Linux terminal execution is unavailable in ExamGuard; provide the response requested by your instructor.'
-                    : activeQuestion.type === 'design_lab'
-                      ? 'Design canvas tools are unavailable in ExamGuard; provide the requested written response.'
-                      : activeQuestion.type === 'networking_lab'
-                        ? 'Networking simulator tools are unavailable in ExamGuard; provide the requested written response.'
-                        : 'Windows lab tools are unavailable in ExamGuard; provide the requested written response.'}</span>
+                  <span>{activeQuestion.type === 'networking_lab'
+                    ? 'Networking simulation is not available in this desktop session; provide the requested written response.'
+                    : 'Windows lab tools are unavailable in ExamGuard; provide the requested written response.'}</span>
                 </label>
               )}
             </article>

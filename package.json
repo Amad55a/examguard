@@ -1,6 +1,6 @@
 {
   "name": "examguard-desktop",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "private": true,
   "author": "UniCORE",
   "description": "ExamGuard desktop exam client",
@@ -19,8 +19,16 @@
     "package:linux": "npm run build && electron-builder --linux && sha256sum release/*.deb release/*.AppImage > release/SHA256SUMS.txt"
   },
   "dependencies": {
+    "@monaco-editor/react": "^4.7.0",
+    "@xterm/addon-fit": "^0.11.0",
+    "@xterm/xterm": "^6.0.0",
+    "axios": "^1.20.0",
+    "fabric": "^7.4.0",
+    "lucide-react": "^1.56.0",
+    "monaco-editor": "^0.57.0",
     "react": "^19.3.0",
-    "react-dom": "^19.3.0"
+    "react-dom": "^19.3.0",
+    "webfontloader": "^1.6.28"
   },
   "devDependencies": {
     "@eslint/js": "^9.39.0",

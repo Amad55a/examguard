@@ -1,3 +1,12 @@
+export function getExamGuardLabMode() {
+  const candidate = typeof globalThis !== 'undefined' ? globalThis.window : undefined
+  return candidate && typeof candidate.examGuard?.runCode === 'function' ? 'examguard' : 'legacy'
+}
+
+export function buildCodeExecutionRequest({ questionId, language, code, stdin = '' }) {
+  return { questionId, language, code, stdin }
+}
+
 export function answersToMap(questions, savedAnswers = []) {
   const questionTypes = new Map(questions.map((question) => [question.id, question.type]))
   const answerMap = {}
